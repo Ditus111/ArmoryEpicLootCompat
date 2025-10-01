@@ -1,0 +1,93 @@
+using BepInEx;
+using HarmonyLib;
+using UnityEngine;
+using System.Collections.Generic;
+
+[BepInPlugin("com.ditus.ArmoryEpicLootCompat", "Armory-EpicLoot Compatibility", "1.0.0")]
+[BepInDependency("randyknapp.mods.epicloot")]
+[BepInDependency("midnight.mods.valheimarmory")]
+public class ArmoryEpicLootCompat : BaseUnityPlugin
+{
+    public static ConfigEntry<int> ArmoryChance;
+    public static ConfigEntry<int> VanillaChance;
+
+    private void Awake()
+    {
+        ArmoryChance = Config.Bind("General", "ArmoryChance", 50,
+            "Шанс випадіння зброї ValheimArmory (у відсотках).");
+        VanillaChance = Config.Bind("General", "VanillaChance", 50,
+            "Шанс випадіння ванільної зброї (у відсотках).");
+
+        var harmony = new Harmony("com.ditus.ArmoryEpicLootCompat");
+        harmony.PatchAll();
+    }
+
+    [HarmonyPatch(typeof(DropTable), "GetDropList")]
+    public static class Patch_DropTable_GetDropList
+    {
+        static void Prefix(DropTable __instance)
+        {
+            for (int i = 0; i < __instance.m_drops.Count; i++)
+            {
+                var drop = __instance.m_drops[i];
+                if (drop?.m_item == null) continue;
+
+                if (IsVanillaWeapon(drop.m_item))
+                {
+                    var armoryItems = GetArmoryWeaponsSameType(drop.m_item);
+                    foreach (var armoryItem in armoryItems)
+                    {
+                        float total = ArmoryChance.Value + VanillaChance.Value;
+                        if (total <= 0f) continue;
+
+                        float vanillaWeight = drop.m_weight * (VanillaChance.Value / total);
+                        float armoryWeight = drop.m_weight * (ArmoryChance.Value / total);
+
+                        drop.m_weight = vanillaWeight;
+
+                        __instance.m_drops.Add(new DropTable.DropData
+                        {
+                            m_item = armoryItem.gameObject,
+                            m_weight = armoryWeight,
+                            m_stackMin = drop.m_stackMin,
+                            m_stackMax = drop.m_stackMax,
+                            m_dropMin = drop.m_dropMin,
+                            m_dropMax = drop.m_dropMax
+                        });
+
+                        Debug.Log($"[ArmoryEpicLootCompat] In drop table {__instance.name}: {drop.m_item.name} vs {armoryItem.name} -> {VanillaChance.Value}% / {ArmoryChance.Value}%");
+                    }
+                }
+            }
+        }
+
+        private static bool IsVanillaWeapon(GameObject obj)
+        {
+            string name = obj.name.ToLower();
+            return name.Contains("sword") || name.Contains("bow") || name.Contains("axe")
+                || name.Contains("mace") || name.Contains("spear");
+        }
+
+        private static IEnumerable<ItemDrop> GetArmoryWeaponsSameType(GameObject vanillaWeapon)
+        {
+            string type = vanillaWeapon.name.ToLower();
+            foreach (var prefab in ObjectDB.instance.m_items)
+            {
+                var drop = prefab.GetComponent<ItemDrop>();
+                if (drop == null) continue;
+                if (!drop.name.StartsWith("VA_")) continue;
+
+                if (type.Contains("sword") && drop.name.ToLower().Contains("sword"))
+                    yield return drop;
+                if (type.Contains("bow") && drop.name.ToLower().Contains("bow"))
+                    yield return drop;
+                if (type.Contains("axe") && drop.name.ToLower().Contains("axe"))
+                    yield return drop;
+                if (type.Contains("spear") && drop.name.ToLower().Contains("spear"))
+                    yield return drop;
+                if (type.Contains("mace") && drop.name.ToLower().Contains("mace"))
+                    yield return drop;
+            }
+        }
+    }
+}
